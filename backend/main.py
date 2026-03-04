@@ -10,6 +10,7 @@ Endpoints:
 """
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
@@ -22,11 +23,26 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
 )
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Warm up RAG service at startup so errors surface in logs, not per-request."""
+    try:
+        logger.info("Initializing RAG service...")
+        get_rag_service()
+        logger.info("RAG service ready.")
+    except Exception as e:
+        logger.error("RAG service init failed (continuing anyway): %s", e)
+    yield
+
 
 app = FastAPI(
     title="PharmaBot API",
     description="RAG-powered pharmaceutical information assistant",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS — allow frontend dev server

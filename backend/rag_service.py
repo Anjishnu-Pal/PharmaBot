@@ -205,20 +205,34 @@ class RAGService:
     def __init__(self):
         self.llm = LLMService()
 
-        # ChromaDB
-        self._chroma = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
-        self._ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=settings.EMBEDDING_MODEL,
-        )
-        self._med_col = self._chroma.get_or_create_collection(
-            "medicines", embedding_function=self._ef
-        )
-        self._dis_col = self._chroma.get_or_create_collection(
-            "diseases", embedding_function=self._ef
-        )
-        self._dm_col = self._chroma.get_or_create_collection(
-            "disease_medicine_map", embedding_function=self._ef
-        )
+        # ChromaDB — wrapped so a corrupted/missing db doesn't crash startup
+        try:
+            self._chroma = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
+            self._ef = embedding_functions.SentenceTransformerEmbeddingFunction(
+                model_name=settings.EMBEDDING_MODEL,
+            )
+            self._med_col = self._chroma.get_or_create_collection(
+                "medicines", embedding_function=self._ef
+            )
+            self._dis_col = self._chroma.get_or_create_collection(
+                "diseases", embedding_function=self._ef
+            )
+            self._dm_col = self._chroma.get_or_create_collection(
+                "disease_medicine_map", embedding_function=self._ef
+            )
+            logger.info(
+                "ChromaDB ready — medicines:%d diseases:%d dm_map:%d",
+                self._med_col.count(),
+                self._dis_col.count(),
+                self._dm_col.count(),
+            )
+        except Exception as e:
+            logger.error("ChromaDB init failed: %s — vector search will be unavailable", e)
+            self._chroma = None
+            self._ef = None
+            self._med_col = None
+            self._dis_col = None
+            self._dm_col = None
 
     # ----- public API -----
 
@@ -463,6 +477,8 @@ class RAGService:
 
     def _query_collection(self, col, query: str, n: int = 5) -> list[str]:
         """Query a ChromaDB collection and return document texts."""
+        if col is None:
+            return []
         try:
             if col.count() == 0:
                 return []
@@ -474,6 +490,8 @@ class RAGService:
 
     def _query_collection_with_meta(self, col, query: str, n: int = 5) -> list[dict]:
         """Query a ChromaDB collection and return metadata dicts."""
+        if col is None:
+            return []
         try:
             if col.count() == 0:
                 return []
