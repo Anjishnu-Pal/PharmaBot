@@ -13,6 +13,56 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Drug name aliases — map international / misspelled names to FDA equivalents
+# ---------------------------------------------------------------------------
+_DRUG_ALIASES: dict[str, str] = {
+    # Paracetamol (UK/India) → Acetaminophen (US)
+    "paracetamol": "acetaminophen",
+    "paracitamol": "acetaminophen",
+    "paracetamole": "acetaminophen",
+    "acetaminophen": "acetaminophen",
+    "tylenol": "acetaminophen",
+    # Ibuprofen aliases
+    "brufen": "ibuprofen",
+    "advil": "ibuprofen",
+    "nurofen": "ibuprofen",
+    # Aspirin
+    "aspirin": "aspirin",
+    "disprin": "aspirin",
+    # Metformin
+    "glucophage": "metformin",
+    # Amoxicillin
+    "amoxil": "amoxicillin",
+    "trimox": "amoxicillin",
+    # Omeprazole
+    "prilosec": "omeprazole",
+    "losec": "omeprazole",
+    # Ciprofloxacin
+    "cipro": "ciprofloxacin",
+    # Atorvastatin
+    "lipitor": "atorvastatin",
+    # Amlodipine
+    "norvasc": "amlodipine",
+    # Azithromycin
+    "zithromax": "azithromycin",
+    "zpack": "azithromycin",
+    # Cetirizine
+    "zyrtec": "cetirizine",
+    # Pantoprazole
+    "pantop": "pantoprazole",
+    # Doxycycline
+    "vibramycin": "doxycycline",
+    # Diclofenac
+    "voltaren": "diclofenac",
+}
+
+
+def resolve_drug_alias(name: str) -> str:
+    """Return the FDA-canonical form of a drug name, or the original if no alias found."""
+    return _DRUG_ALIASES.get(name.lower().strip(), name)
+
+
+# ---------------------------------------------------------------------------
 # Simple TTL cache
 # ---------------------------------------------------------------------------
 _cache: dict[str, tuple[float, dict]] = {}
@@ -65,19 +115,23 @@ def _first(lst: list | None) -> str:
 def search_drug(name: str) -> Optional[dict]:
     """
     Search OpenFDA drug/label endpoint by brand OR generic name.
+    Automatically resolves international/misspelled names via alias map.
     Returns a structured dict with label sections, or None if not found.
     """
     name = name.strip()
     if not name:
         return None
 
-    cache_key = f"drug:{name.lower()}"
+    # Resolve alias (e.g. paracetamol → acetaminophen)
+    canonical = resolve_drug_alias(name)
+
+    cache_key = f"drug:{canonical.lower()}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
     # Search both brand_name and generic_name with OR
-    safe_name = quote_plus(name)
+    safe_name = quote_plus(canonical)
     url = (
         f"{settings.OPENFDA_BASE_URL}/drug/label.json"
         f"?search=openfda.brand_name:\"{safe_name}\""

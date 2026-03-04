@@ -1,4 +1,6 @@
 /* PharmaBot — Global Resets */
+@import "tailwindcss";
+
 *,
 *::before,
 *::after {

@@ -1,0 +1,17 @@
+{
+  "name": "PharmaBot",
+  "postStartCommand": "bash /workspaces/PharmaBot/start.sh",
+  "forwardPorts": [5173, 8000],
+  "portsAttributes": {
+    "5173": {
+      "label": "PharmaBot Frontend",
+      "onAutoForward": "silent",
+      "visibility": "public"
+    },
+    "8000": {
+      "label": "PharmaBot Backend",
+      "onAutoForward": "silent",
+      "visibility": "private"
+    }
+  }
+}

@@ -12,6 +12,92 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 from config import settings
+
+# ---------------------------------------------------------------------------
+# Comet ML logging (optional — only active when COMET_API_KEY is set)
+# ---------------------------------------------------------------------------
+
+class CometLogger:
+    """
+    Thin wrapper around comet_ml for fail-safe interaction logging.
+    If the API key is missing or comet_ml is unavailable, all calls become no-ops.
+    """
+
+    def __init__(self):
+        self._experiment = None
+        if not settings.COMET_API_KEY or settings.COMET_API_KEY.startswith("your_"):
+            logger.info("Comet ML disabled — COMET_API_KEY not set.")
+            return
+        try:
+            import comet_ml
+
+            self._experiment = comet_ml.Experiment(
+                api_key=settings.COMET_API_KEY,
+                project_name=settings.COMET_PROJECT_NAME,
+                workspace=settings.COMET_WORKSPACE or None,
+                auto_output_logging="simple",
+                disabled=False,
+            )
+            logger.info("Comet ML experiment started: %s", self._experiment.get_key())
+        except Exception as exc:
+            logger.warning("Comet ML init failed (logging disabled): %s", exc)
+
+    # ---- public helpers ----
+
+    def log_chat(self, query: str, response: str, confidence: str, thread_id: str) -> None:
+        """Log a single chat turn."""
+        if not self._experiment:
+            return
+        try:
+            self._experiment.log_text(
+                text=f"[Q] {query}\n[A] {response}",
+                metadata={"confidence": confidence, "thread_id": thread_id},
+            )
+            self._experiment.log_metric("confidence_score", {"high": 1.0, "medium": 0.5, "low": 0.1}.get(confidence, 0))
+        except Exception as exc:
+            logger.warning("Comet log_chat failed: %s", exc)
+
+    def log_search(self, query: str, result_count: int) -> None:
+        """Log a search query."""
+        if not self._experiment:
+            return
+        try:
+            self._experiment.log_text(text=f"[SEARCH] {query}", metadata={"results": result_count})
+            self._experiment.log_metric("search_result_count", result_count)
+        except Exception as exc:
+            logger.warning("Comet log_search failed: %s", exc)
+
+    def log_symptoms(self, symptoms: str, response: str, confidence: str) -> None:
+        """Log a symptom check interaction."""
+        if not self._experiment:
+            return
+        try:
+            self._experiment.log_text(
+                text=f"[SYMPTOMS] {symptoms}\n[A] {response}",
+                metadata={"confidence": confidence},
+            )
+        except Exception as exc:
+            logger.warning("Comet log_symptoms failed: %s", exc)
+
+    def log_safety_block(self, query: str) -> None:
+        """Log queries blocked by the safety filter."""
+        if not self._experiment:
+            return
+        try:
+            self._experiment.log_text(text=f"[BLOCKED] {query}", metadata={"reason": "safety_filter"})
+            self._experiment.log_metric("safety_blocks", 1)
+        except Exception as exc:
+            logger.warning("Comet log_safety_block failed: %s", exc)
+
+
+_comet: Optional[CometLogger] = None
+
+
+def get_comet_logger() -> CometLogger:
+    global _comet
+    if _comet is None:
+        _comet = CometLogger()
+    return _comet
 from prompts import (
     SYSTEM_PROMPT,
     CHAT_PROMPT_TEMPLATE,
@@ -48,20 +134,37 @@ class LLMService:
         else:
             raise ValueError(f"Unknown LLM_PROVIDER: {self.provider}")
 
+    def _call_openrouter(self, model: str, prompt: str) -> str:
+        """Call OpenRouter with a specific model; raises on error."""
+        completion = self._client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = completion.choices[0].message.content or ""
+        # Strip <think>...</think> tags from reasoning models
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        return text
+
     def generate(self, prompt: str) -> str:
         try:
             if self.provider == "gemini":
                 resp = self._model.generate_content(prompt)
                 return resp.text
             else:
-                completion = self._client.chat.completions.create(
-                    model=settings.openrouter_model,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                text = completion.choices[0].message.content or ""
-                # Strip <think>...</think> tags from reasoning models
-                text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-                return text
+                # Try primary model first, then fallbacks on 429
+                models_to_try = [settings.openrouter_model] + settings.LLM_FALLBACK_MODELS
+                last_error = None
+                for model in models_to_try:
+                    try:
+                        return self._call_openrouter(model, prompt)
+                    except Exception as e:
+                        err_str = str(e)
+                        if "429" in err_str or "rate" in err_str.lower():
+                            logger.warning("Model %s rate-limited, trying next...", model)
+                            last_error = e
+                            continue
+                        raise  # non-rate-limit errors bubble up immediately
+                raise last_error  # all models exhausted
         except Exception as e:
             logger.error("LLM generation failed: %s", e)
             return "I'm sorry, I encountered an error generating a response. Please try again."
@@ -130,6 +233,8 @@ class RAGService:
         """
         tid, history = _get_thread(thread_id)
 
+        comet = get_comet_logger()
+
         # 1. Safety check (lightweight — skip LLM call, use keyword heuristic)
         if self._is_unsafe(message):
             answer = (
@@ -141,6 +246,7 @@ class RAGService:
             )
             history.append({"role": "user", "content": message})
             history.append({"role": "assistant", "content": answer})
+            comet.log_safety_block(message)
             return {
                 "response": answer,
                 "thread_id": tid,
@@ -230,6 +336,9 @@ class RAGService:
                 "source": "fda",
             })
 
+        # 9. Log to Comet ML
+        comet.log_chat(query=message, response=answer, confidence=confidence, thread_id=tid)
+
         return {
             "response": answer,
             "thread_id": tid,
@@ -253,6 +362,7 @@ class RAGService:
         ):
             meta["relevance"] = round(1 - dist, 4) if dist else 0
             out.append(meta)
+        get_comet_logger().log_search(query=query, result_count=len(out))
         return out
 
     def get_medicine_detail(self, name: str) -> dict:
@@ -339,11 +449,14 @@ class RAGService:
         if dm_results:
             sources.append({"type": "dataset", "label": "Disease-Medicine Map"})
 
+        confidence_val = "medium" if (disease_results or dm_results) else "low"
+        get_comet_logger().log_symptoms(symptoms=symptom_text, response=answer, confidence=confidence_val)
+
         return {
             "response": answer,
             "thread_id": tid,
             "sources": sources,
-            "confidence": "medium" if (disease_results or dm_results) else "low",
+            "confidence": confidence_val,
         }
 
     # ----- private helpers -----
@@ -430,12 +543,27 @@ class RAGService:
                 if w.endswith(suf):
                     names.add(w.capitalize())
 
-        # Also add any explicitly lowercase drug names
+        # Also add any explicitly lowercase drug names (suffix-based)
         lower_words = re.findall(r'\b[a-z]{4,}\b', message)
         for w in lower_words:
             for suf in _suffixes:
                 if w.endswith(suf):
                     names.add(w)
+
+        # Catch ALL lowercase words 4+ chars not in a general stopword list
+        # This handles drug names like "paracetamol", "ibuprofen", "metformin"
+        _stop = {
+            "what", "when", "where", "which", "while", "with", "this", "that",
+            "from", "have", "will", "been", "does", "dose", "drug", "used",
+            "also", "some", "more", "than", "then", "them", "they", "were",
+            "give", "tell", "know", "about", "side", "effects", "dosage",
+            "please", "could", "would", "should", "medicine", "tablet",
+            "symptoms", "treatment", "information", "cause", "using",
+            "take", "often", "much", "many", "help",
+        }
+        for w in lower_words:
+            if w not in _stop and len(w) >= 4:
+                names.add(w)
 
         # Check recent history for drug names mentioned
         for msg in history[-4:]:

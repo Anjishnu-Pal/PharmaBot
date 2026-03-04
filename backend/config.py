@@ -16,6 +16,9 @@ class Settings:
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
     LLM_MODEL: str = os.getenv("LLM_MODEL", "")
+    LLM_FALLBACK_MODELS: list = [
+        m.strip() for m in os.getenv("LLM_FALLBACK_MODELS", "").split(",") if m.strip()
+    ]
 
     # --- Embeddings / Vector DB ---
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
@@ -35,6 +38,11 @@ class Settings:
 
     # --- RAG ---
     CONFIDENCE_THRESHOLD: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.35"))
+
+    # --- Comet ML ---
+    COMET_API_KEY: str = os.getenv("COMET_API_KEY", "")
+    COMET_PROJECT_NAME: str = os.getenv("COMET_PROJECT_NAME", "pharmabot")
+    COMET_WORKSPACE: str = os.getenv("COMET_WORKSPACE", "")
 
     @property
     def gemini_model(self) -> str:

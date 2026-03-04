@@ -3,9 +3,11 @@ uvicorn[standard]
 python-multipart
 chromadb
 pandas
+numpy
 google-generativeai
 openai
 python-dotenv
 requests
 sentence-transformers
 nltk
+comet_ml
