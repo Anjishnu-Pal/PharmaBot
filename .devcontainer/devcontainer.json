@@ -1,11 +1,15 @@
 {
   "name": "PharmaBot",
-  "postStartCommand": "bash /workspaces/PharmaBot/start.sh",
-  "forwardPorts": [5173, 8000],
+  "image": "mcr.microsoft.com/devcontainers/universal:2",
+
+  // Runs every time the codespace starts or resumes from sleep
+  "postStartCommand": "export PATH=/home/codespace/.python/current/bin:$HOME/.local/bin:$PATH && bash /workspaces/PharmaBot/.devcontainer/start.sh",
+
+  // Auto-forward ports and set them public
   "portsAttributes": {
     "5173": {
       "label": "PharmaBot Frontend",
-      "onAutoForward": "silent",
+      "onAutoForward": "notify",
       "visibility": "public"
     },
     "8000": {
@@ -13,5 +17,7 @@
       "onAutoForward": "silent",
       "visibility": "private"
     }
-  }
+  },
+
+  "forwardPorts": [5173, 8000]
 }

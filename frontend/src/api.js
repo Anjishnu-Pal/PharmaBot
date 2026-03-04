@@ -2,6 +2,8 @@
  * API client for PharmaBot backend.
  */
 
+// Empty string = use Vite proxy (local/codespace dev)
+// Set VITE_API_URL on Vercel to point to your Render backend URL
 const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 async function request(path, options = {}) {
